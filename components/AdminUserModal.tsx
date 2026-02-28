@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { User } from '../types';
 import { DEPARTMENTS, MONTHS } from '../constants';
-import { getAllUsers, saveUser, deleteUser, getAllMonths, toggleMonthLock, getHolidays, saveHoliday, deleteHoliday, Holiday } from '../services/storageService';
+import { getAllUsers, saveUser, deleteUser, getAllMonths, toggleMonthLock, getHolidays, saveHoliday, deleteHoliday, Holiday, deleteDataByYear } from '../services/storageService';
 
 interface AdminUserModalProps {
   isOpen: boolean;
@@ -18,7 +18,7 @@ interface MonthData {
 }
 
 const AdminUserModal: React.FC<AdminUserModalProps> = ({ isOpen, onClose, currentUser }) => {
-  const [activeTab, setActiveTab] = useState<'users' | 'months' | 'holidays'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'months' | 'holidays' | 'database'>('users');
   const [users, setUsers] = useState<User[]>([]);
   const [months, setMonths] = useState<MonthData[]>([]);
   const [holidays, setHolidays] = useState<Holiday[]>([]);
@@ -28,6 +28,8 @@ const AdminUserModal: React.FC<AdminUserModalProps> = ({ isOpen, onClose, curren
   
   const [formHoliday, setFormHoliday] = useState<Holiday>({ date: '', name: '' });
   const [isEditingHoliday, setIsEditingHoliday] = useState(false);
+  
+  const [deleteYear, setDeleteYear] = useState<number>(new Date().getFullYear() - 1);
 
   useEffect(() => {
     if (isOpen) {
@@ -91,6 +93,15 @@ const AdminUserModal: React.FC<AdminUserModalProps> = ({ isOpen, onClose, curren
     await saveHoliday(formHoliday);
     setIsEditingHoliday(false);
     loadHolidays();
+  };
+
+  const handleDeleteYear = async () => {
+    if (confirm(`⚠️ ATENCIÓN ⚠️\n\n¿Estás seguro de que deseas eliminar TODOS los datos (asistencia, meses, festivos) del año ${deleteYear}?\n\nEsta acción NO se puede deshacer.`)) {
+      await deleteDataByYear(deleteYear);
+      alert(`Datos del año ${deleteYear} eliminados correctamente.`);
+      loadMonths();
+      loadHolidays();
+    }
   };
 
   const handleEdit = (u: User) => {
@@ -178,6 +189,12 @@ const AdminUserModal: React.FC<AdminUserModalProps> = ({ isOpen, onClose, curren
             onClick={() => setActiveTab('holidays')}
           >
             Calendario de Festivos
+          </button>
+          <button 
+            className={`flex-1 py-3 font-medium text-center ${activeTab === 'database' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
+            onClick={() => setActiveTab('database')}
+          >
+            Base de Datos
           </button>
         </div>
 
@@ -418,6 +435,40 @@ const AdminUserModal: React.FC<AdminUserModalProps> = ({ isOpen, onClose, curren
               </div>
             </form>
             )
+          )}
+
+          {activeTab === 'database' && (
+            <div className="max-w-2xl mx-auto mt-8">
+              <div className="bg-red-50 border border-red-200 rounded-lg p-6">
+                <h3 className="text-xl font-bold text-red-700 mb-4 flex items-center gap-2">
+                  <span>⚠️</span> Zona de Peligro: Borrado de Datos
+                </h3>
+                <p className="text-gray-700 mb-6">
+                  Esta opción permite eliminar todos los registros de asistencia, metadatos de meses y festivos asociados a un año específico. 
+                  <strong> Los empleados no serán eliminados</strong>, pero sí todo su historial de asistencia de ese año.
+                </p>
+                
+                <div className="flex items-end gap-4 bg-white p-4 rounded border border-red-100">
+                  <div className="flex-1">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Año a eliminar</label>
+                    <input 
+                      type="number" 
+                      value={deleteYear}
+                      onChange={e => setDeleteYear(parseInt(e.target.value) || new Date().getFullYear())}
+                      className="w-full p-2 border rounded focus:ring-2 focus:ring-red-500"
+                      min="2000"
+                      max="2100"
+                    />
+                  </div>
+                  <button 
+                    onClick={handleDeleteYear}
+                    className="bg-red-600 text-white px-6 py-2 rounded font-medium hover:bg-red-700 transition-colors h-[42px]"
+                  >
+                    Borrar Datos del {deleteYear}
+                  </button>
+                </div>
+              </div>
+            </div>
           )}
         </div>
       </div>

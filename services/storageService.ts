@@ -376,6 +376,14 @@ export const deleteHoliday = async (date: string) => {
   await persistDB();
 };
 
+export const deleteDataByYear = async (year: number) => {
+  await initDB();
+  db.run(`DELETE FROM metadata WHERE año = ?`, [year]);
+  db.run(`DELETE FROM attendance WHERE año = ?`, [year]);
+  db.run(`DELETE FROM holidays WHERE date LIKE ?`, [`${year}-%`]);
+  await persistDB();
+};
+
 export const getEmployeeYearlyAttendance = async (employeeId: string, year: number) => {
   await initDB();
   const res = db.exec(`SELECT mes, dia, code FROM attendance WHERE employee_id=? AND año=?`, [employeeId, year]);
