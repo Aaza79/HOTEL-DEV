@@ -86,23 +86,39 @@ const EmployeeModal: React.FC<EmployeeModalProps> = ({ isOpen, onClose, onSave, 
       }
     });
 
-    // Check official holidays
+    const startOfYear = new Date(currentYear, 0, 1);
+    const endOfYear = new Date(currentYear, 11, 31);
+    
+    const alta = new Date(emp.fechaAlta);
+    alta.setHours(0,0,0,0);
+    const baja = emp.fechaBaja ? new Date(emp.fechaBaja) : endOfYear;
+    baja.setHours(0,0,0,0);
+
+    const actualStart = alta > startOfYear ? alta : startOfYear;
+    const actualEnd = baja < endOfYear ? baja : endOfYear;
+
+    let daysWorked = 0;
+    if (actualEnd >= actualStart) {
+      const diffTime = Math.abs(actualEnd.getTime() - actualStart.getTime());
+      daysWorked = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
+    }
+    
+    const daysInYear = (currentYear % 4 === 0 && currentYear % 100 !== 0) || currentYear % 400 === 0 ? 366 : 365;
+    
+    // Proporcional al tiempo trabajado en el año
+    const totalFestivosProporcionales = Math.round((daysWorked / daysInYear) * holidays.length);
+    
+    // Check official holidays to see which ones were worked
     holidays.forEach(h => {
       const [y, m, d] = h.date.split('-').map(Number);
       const att = attendance.find(a => a.mes === m && a.dia === d);
       
-      // If they were employed on this date
       const holidayDate = new Date(h.date);
       holidayDate.setHours(0,0,0,0);
-      const alta = new Date(emp.fechaAlta);
-      alta.setHours(0,0,0,0);
-      let baja = emp.fechaBaja ? new Date(emp.fechaBaja) : null;
-      if (baja) baja.setHours(0,0,0,0);
       
-      if (holidayDate >= alta && (!baja || holidayDate <= baja)) {
-        festivosEnContrato++;
-        // If they don't have 'F' or 'SC' on this exact day, it's a worked holiday
-        if (!att || (att.code !== 'F' && att.code !== 'SC')) {
+      if (holidayDate >= alta && (!emp.fechaBaja || holidayDate <= baja)) {
+        // If they don't have 'F' or 'SC' or 'V' on this exact day, it's a worked holiday
+        if (!att || (att.code !== 'F' && att.code !== 'SC' && att.code !== 'V')) {
           festivosTrabajados.push(`${h.date} (${h.name})`);
         }
       }
@@ -112,7 +128,7 @@ const EmployeeModal: React.FC<EmployeeModalProps> = ({ isOpen, onClose, onSave, 
       empName: emp.nombre,
       festivosTrabajados,
       festivosDisfrutados,
-      totalFestivos: festivosEnContrato
+      totalFestivos: totalFestivosProporcionales
     });
     setActiveTab('summary');
   };

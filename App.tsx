@@ -16,6 +16,65 @@ const App: React.FC = () => {
   const [showAdmin, setShowAdmin] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 
+  // Use refs to avoid reconnecting WebSocket on every data change
+  const currentViewRef = React.useRef({
+    hotel: '',
+    departamento: '',
+    año: 0,
+    mes: 0
+  });
+
+  useEffect(() => {
+    if (appData) {
+      currentViewRef.current = {
+        hotel: appData.metadata.hotel,
+        departamento: appData.metadata.departamento,
+        año: appData.metadata.año,
+        mes: appData.metadata.mes
+      };
+    }
+  }, [appData]);
+
+  useEffect(() => {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const socket = new WebSocket(`${protocol}//${window.location.host}`);
+    
+    socket.onopen = () => {
+      console.log('WebSocket connected');
+    };
+
+    socket.onmessage = async (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'APPDATA_CHANGED' || data.type === 'HOLIDAYS_CHANGED') {
+          const { hotel, departamento, año, mes } = data.payload || { hotel: '', departamento: '', año: -1, mes: -1 };
+          const current = currentViewRef.current;
+          
+          if (
+            (current.hotel === hotel && current.departamento === departamento && current.año === año && current.mes === mes) ||
+            (año === -1 && mes === -1) // Global sync for this hotel/dept or all
+          ) {
+            // Reload data if we are viewing the same quadrant
+            const updated = await loadFromStorage(current.hotel, current.departamento, current.año, current.mes);
+            if (updated) {
+              setAppData(updated);
+            }
+          }
+        }
+      } catch (e) {
+        console.error('Error parsing WS message', e);
+      }
+    };
+
+    socket.onclose = () => {
+      console.log('WebSocket disconnected');
+    };
+
+    return () => {
+      socket.close();
+    };
+  }, []);
+
   useEffect(() => {
     // Check if there is an active session in session storage (simple persistence)
     const storedUser = sessionStorage.getItem('hotel_user');
