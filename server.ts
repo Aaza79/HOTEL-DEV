@@ -59,7 +59,13 @@ db.exec(`
 // Add default admin if not exists
 const adminExists = db.prepare('SELECT * FROM users WHERE username = ?').get('admin');
 if (!adminExists) {
-  db.prepare('INSERT INTO users (username, password, role, allowedDepartments) VALUES (?, ?, ?, ?)').run('admin', 'admin123', 'admin', '["ALL"]');
+  db.prepare('INSERT INTO users (username, password, role, allowedDepartments) VALUES (?, ?, ?, ?)').run('admin', '1579@Chemas', 'admin', '["ALL"]');
+} else {
+  // Update password if it's the old default
+  const adminUser = adminExists as any;
+  if (adminUser.password === 'admin123') {
+    db.prepare('UPDATE users SET password = ? WHERE username = ?').run('1579@Chemas', 'admin');
+  }
 }
 
 // HTTP Server
