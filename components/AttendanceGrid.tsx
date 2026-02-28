@@ -1,6 +1,7 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { Employee, SelectionState } from '../types';
 import { CODES, SC_CODE } from '../constants';
+import { Holiday } from '../services/storageService';
 
 interface AttendanceGridProps {
   year: number;
@@ -12,6 +13,7 @@ interface AttendanceGridProps {
   onCellDoubleClick: (empId: string, day: number) => void;
   onEditEmployee: (id: string) => void;
   readOnly?: boolean;
+  holidays?: Holiday[];
 }
 
 const AttendanceGrid: React.FC<AttendanceGridProps> = ({ 
@@ -23,7 +25,8 @@ const AttendanceGrid: React.FC<AttendanceGridProps> = ({
   onCellClick,
   onCellDoubleClick,
   onEditEmployee,
-  readOnly = false
+  readOnly = false,
+  holidays = []
 }) => {
   const daysInMonth = new Date(year, month, 0).getDate();
   const days = Array.from({ length: daysInMonth }, (_, i) => i + 1);
@@ -98,6 +101,11 @@ const AttendanceGrid: React.FC<AttendanceGridProps> = ({
     return Object.values(emp.horasExtras || {}).reduce((acc, val) => acc + (val || 0), 0);
   };
 
+  const getHolidayForDay = (day: number) => {
+    const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    return holidays.find(h => h.date === dateStr);
+  };
+
   useEffect(() => {
     const up = () => { isMouseDown.current = false; };
     window.addEventListener('mouseup', up);
@@ -114,10 +122,14 @@ const AttendanceGrid: React.FC<AttendanceGridProps> = ({
               {days.map(d => {
                 const dow = getDayOfWeek(d);
                 const isWeekend = dow === 0 || dow === 6;
+                const holiday = getHolidayForDay(d);
                 return (
-                  <th key={d} className={`border border-gray-300 w-[42px] min-w-[42px] text-center ${dow === 6 ? 'bg-blue-50' : dow === 0 ? 'bg-blue-100' : 'bg-white'}`}>
+                  <th key={d} className={`border border-gray-300 w-[42px] min-w-[42px] text-center relative ${dow === 6 ? 'bg-blue-50' : dow === 0 ? 'bg-blue-100' : 'bg-white'}`} title={holiday ? holiday.name : ''}>
                     <div className="text-xs font-bold text-gray-800">{d}</div>
                     <div className={`text-[10px] font-medium ${isWeekend ? 'text-blue-800' : 'text-gray-500'}`}>{weekDays[dow]}</div>
+                    {holiday && (
+                      <div className="absolute top-0 right-0 w-2 h-2 bg-blue-500 rounded-bl-sm" title={holiday.name}></div>
+                    )}
                   </th>
                 );
               })}

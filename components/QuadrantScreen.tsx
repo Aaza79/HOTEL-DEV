@@ -6,7 +6,7 @@ import Toolbar from './Toolbar';
 import EmployeeModal from './EmployeeModal';
 import ManualModal from './ManualModal';
 import ExtraHoursModal from './ExtraHoursModal';
-import { saveToStorage, syncEmployeeAcrossMonths, deleteEmployeeAcrossMonths } from '../services/storageService';
+import { saveToStorage, syncEmployeeAcrossMonths, deleteEmployeeAcrossMonths, loadPreviousMonthData, getHolidays, Holiday } from '../services/storageService';
 import { generateExcelReport, generatePDFReport, sharePDFReport } from '../services/reportService';
 
 interface QuadrantScreenProps {
@@ -27,6 +27,7 @@ const QuadrantScreen: React.FC<QuadrantScreenProps> = ({ data, onBack, onUpdateD
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | null>(null);
   const [showDownloadMenu, setShowDownloadMenu] = useState(false);
   const [heModal, setHeModal] = useState<{ open: boolean; empId: string; day: number; val: number }>({ open: false, empId: '', day: 0, val: 0 });
+  const [holidays, setHolidays] = useState<Holiday[]>([]);
   
   const downloadMenuRef = useRef<HTMLDivElement>(null);
 
@@ -34,16 +35,25 @@ const QuadrantScreen: React.FC<QuadrantScreenProps> = ({ data, onBack, onUpdateD
   useEffect(() => {
     setEmployees(data.empleados);
     setSelection({ start: null, current: null, selectedCells: new Set() });
+    loadHolidays();
   }, [data]);
 
+  const loadHolidays = async () => {
+    const list = await getHolidays(data.metadata.año);
+    setHolidays(list);
+  };
+
   const isMonthLocked = useMemo(() => {
+    if (data.metadata.isLocked !== undefined) {
+      return data.metadata.isLocked;
+    }
     const { año, mes } = data.metadata;
     const lastDayOfMonth = new Date(año, mes, 0); 
     const lockDate = new Date(lastDayOfMonth);
     lockDate.setDate(lockDate.getDate() + 7);
     lockDate.setHours(23, 59, 59, 999);
     return new Date() > lockDate;
-  }, [data.metadata.año, data.metadata.mes]);
+  }, [data.metadata]);
 
   // Auto-save effect
   useEffect(() => {
@@ -163,9 +173,32 @@ const QuadrantScreen: React.FC<QuadrantScreenProps> = ({ data, onBack, onUpdateD
     await deleteEmployeeAcrossMonths(data.metadata.hotel, data.metadata.departamento, id);
   };
 
+  const handleCopyPreviousMonth = async () => {
+    if (isMonthLocked) return;
+    if (!confirm('¿Estás seguro de que quieres copiar los datos del mes anterior? Esto sobrescribirá los datos actuales.')) return;
+    
+    const prevData = await loadPreviousMonthData(data.metadata.hotel, data.metadata.departamento, data.metadata.año, data.metadata.mes);
+    if (!prevData) {
+      alert('No se encontraron datos del mes anterior.');
+      return;
+    }
+
+    setEmployees(prev => prev.map(emp => {
+      const prevEmp = prevData.empleados.find(e => e.id === emp.id);
+      if (prevEmp) {
+        return {
+          ...emp,
+          asistencia: { ...prevEmp.asistencia },
+          horasExtras: { ...prevEmp.horasExtras }
+        };
+      }
+      return emp;
+    }));
+  };
+
   return (
     <div className="flex flex-col h-screen bg-gray-50 text-gray-900">
-      <header className="bg-white shadow z-30 px-4 py-2 flex justify-between items-center border-b border-gray-200">
+      <header className="bg-white shadow z-[60] px-4 py-2 flex justify-between items-center border-b border-gray-200">
         <div className="flex items-center gap-4">
           <button onClick={onBack} className="text-gray-600 hover:text-blue-600 font-bold flex items-center gap-1">
             <span>←</span> Volver
@@ -201,7 +234,7 @@ const QuadrantScreen: React.FC<QuadrantScreenProps> = ({ data, onBack, onUpdateD
           <div className="relative" ref={downloadMenuRef}>
             <button onClick={() => setShowDownloadMenu(!showDownloadMenu)} className="px-3 py-1 bg-green-100 text-green-800 rounded text-sm font-medium hover:bg-green-200 transition-colors">📥 Informe ▼</button>
             {showDownloadMenu && (
-              <div className="absolute right-0 mt-2 w-48 bg-white rounded shadow-lg py-1 z-50 border ring-1 ring-black ring-opacity-5">
+              <div className="absolute right-0 mt-2 w-48 bg-white rounded shadow-lg py-1 z-[70] border ring-1 ring-black ring-opacity-5">
                 <button onClick={() => { generatePDFReport(data, employees); setShowDownloadMenu(false); }} className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 w-full text-left">📄 PDF (Imprimir)</button>
                 <button onClick={() => { generateExcelReport(data, employees); setShowDownloadMenu(false); }} className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 w-full text-left">📊 Excel (Editable)</button>
                 <div className="border-t my-1"></div>
@@ -210,6 +243,15 @@ const QuadrantScreen: React.FC<QuadrantScreenProps> = ({ data, onBack, onUpdateD
             )}
           </div>
           
+          <button 
+            onClick={handleCopyPreviousMonth} 
+            disabled={isMonthLocked} 
+            className={`px-3 py-1 rounded text-sm font-medium flex items-center gap-1 transition-colors ${isMonthLocked ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-purple-50 text-purple-700 hover:bg-purple-100'}`}
+            title="Copiar datos del mes anterior"
+          >
+            <span>📋</span> Copiar Mes Ant.
+          </button>
+
           <button 
             onClick={() => { setEditingEmpId(null); setShowEmpModal(true); }} 
             disabled={isMonthLocked} 
@@ -233,6 +275,7 @@ const QuadrantScreen: React.FC<QuadrantScreenProps> = ({ data, onBack, onUpdateD
             selection={selection} setSelection={setSelection} onCellClick={handleCellClick}
             onCellDoubleClick={handleCellDoubleClick} onEditEmployee={(id) => { if(!isMonthLocked){ setEditingEmpId(id); setShowEmpModal(true); } }}
             readOnly={isMonthLocked}
+            holidays={holidays}
           />
         </div>
         
@@ -268,7 +311,7 @@ const QuadrantScreen: React.FC<QuadrantScreenProps> = ({ data, onBack, onUpdateD
         )}
       </div>
       
-      <EmployeeModal isOpen={showEmpModal} onClose={() => setShowEmpModal(false)} employees={employees} editId={editingEmpId} onSave={handleSaveEmployee} onDelete={handleDeleteEmployee} onReorder={setEmployees} />
+      <EmployeeModal isOpen={showEmpModal} onClose={() => setShowEmpModal(false)} employees={employees} editId={editingEmpId} onSave={handleSaveEmployee} onDelete={handleDeleteEmployee} onReorder={setEmployees} currentYear={data.metadata.año} />
       <ExtraHoursModal isOpen={heModal.open} onClose={() => setHeModal({ ...heModal, open: false })} onSave={handleSaveHE} currentHours={heModal.val} empName={employees.find(e => e.id === heModal.empId)?.nombre || ''} day={heModal.day} />
       <ManualModal isOpen={showManual} onClose={() => setShowManual(false)} />
     </div>

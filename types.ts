@@ -30,6 +30,7 @@ export interface AppMetadata {
   año: number;
   mes: number;
   ultimaModificacion: string;
+  isLocked?: boolean;
 }
 
 export interface AppData {

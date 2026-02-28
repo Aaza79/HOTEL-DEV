@@ -73,6 +73,7 @@ export const initDB = async () => {
         año INTEGER,
         mes INTEGER,
         ultimaModificacion TEXT,
+        isLocked INTEGER DEFAULT NULL,
         PRIMARY KEY (hotel, departamento, año, mes)
       );
       CREATE TABLE IF NOT EXISTS employees (
@@ -101,7 +102,17 @@ export const initDB = async () => {
         role TEXT,
         allowed_departments TEXT
       );
+      CREATE TABLE IF NOT EXISTS holidays (
+        date TEXT PRIMARY KEY,
+        name TEXT
+      );
     `);
+    
+    try {
+      db.run(`ALTER TABLE metadata ADD COLUMN isLocked INTEGER DEFAULT NULL;`);
+    } catch (e) {
+      // Column might already exist
+    }
     
     await persistDB();
     await seedUsers();
@@ -184,8 +195,8 @@ export const saveToStorage = async (data: AppData) => {
   const modDate = new Date().toISOString();
 
   // Save Metadata
-  db.run(`INSERT OR REPLACE INTO metadata VALUES (?, ?, ?, ?, ?)`, 
-    [hotel, departamento, año, mes, modDate]);
+  db.run(`INSERT OR REPLACE INTO metadata (hotel, departamento, año, mes, ultimaModificacion, isLocked) VALUES (?, ?, ?, ?, ?, ?)`, 
+    [hotel, departamento, año, mes, modDate, data.metadata.isLocked === undefined ? null : (data.metadata.isLocked ? 1 : 0)]);
 
   // Save Employees and Attendance
   for (const emp of data.empleados) {
@@ -212,7 +223,7 @@ export const loadFromStorage = async (hotel: string, dept: string, año: number,
   await initDB();
   
   // Try finding metadata, but don't hard fail if missing if employees exist
-  const meta = db.exec(`SELECT * FROM metadata WHERE hotel=? AND departamento=? AND año=? AND mes=?`, [hotel, dept, año, mes]);
+  const meta = db.exec(`SELECT hotel, departamento, año, mes, ultimaModificacion, isLocked FROM metadata WHERE hotel=? AND departamento=? AND año=? AND mes=?`, [hotel, dept, año, mes]);
   
   const employeesResult = db.exec(`SELECT * FROM employees WHERE hotel=? AND departamento=?`, [hotel, dept]);
   
@@ -254,6 +265,8 @@ export const loadFromStorage = async (hotel: string, dept: string, año: number,
   }
 
   const lastMod = meta.length > 0 ? meta[0].values[0][4] : new Date().toISOString();
+  const isLockedVal = meta.length > 0 ? meta[0].values[0][5] : null;
+  const isLocked = isLockedVal !== null ? (isLockedVal === 1) : undefined;
 
   return {
     metadata: {
@@ -261,7 +274,8 @@ export const loadFromStorage = async (hotel: string, dept: string, año: number,
       departamento: dept,
       año,
       mes,
-      ultimaModificacion: lastMod
+      ultimaModificacion: lastMod,
+      isLocked
     },
     empleados: employees
   };
@@ -304,4 +318,71 @@ export const loadPreviousMonthData = async (hotel: string, dept: string, current
   let prevYear = currentYear;
   if (prevMonth === 0) { prevMonth = 12; prevYear = currentYear - 1; }
   return loadFromStorage(hotel, dept, prevYear, prevMonth);
+};
+
+export const getAllMonths = async () => {
+  await initDB();
+  const res = db.exec(`SELECT hotel, departamento, año, mes, isLocked FROM metadata ORDER BY año DESC, mes DESC`);
+  if (res.length === 0) return [];
+  return res[0].values.map((row: any) => ({
+    hotel: row[0],
+    departamento: row[1],
+    año: row[2],
+    mes: row[3],
+    isLocked: row[4] !== null ? (row[4] === 1) : undefined
+  }));
+};
+
+export const toggleMonthLock = async (hotel: string, dept: string, año: number, mes: number, isLocked: boolean) => {
+  await initDB();
+  db.run(`UPDATE metadata SET isLocked = ? WHERE hotel=? AND departamento=? AND año=? AND mes=?`, [isLocked ? 1 : 0, hotel, dept, año, mes]);
+  await persistDB();
+};
+
+// --- HOLIDAYS MANAGEMENT ---
+
+export interface Holiday {
+  date: string; // YYYY-MM-DD
+  name: string;
+}
+
+export const getHolidays = async (year?: number): Promise<Holiday[]> => {
+  await initDB();
+  let query = `SELECT date, name FROM holidays ORDER BY date ASC`;
+  let params: any[] = [];
+  
+  if (year) {
+    query = `SELECT date, name FROM holidays WHERE date LIKE ? ORDER BY date ASC`;
+    params = [`${year}-%`];
+  }
+  
+  const res = db.exec(query, params);
+  if (res.length === 0) return [];
+  return res[0].values.map((row: any) => ({
+    date: row[0],
+    name: row[1]
+  }));
+};
+
+export const saveHoliday = async (holiday: Holiday) => {
+  await initDB();
+  db.run(`INSERT OR REPLACE INTO holidays (date, name) VALUES (?, ?)`, [holiday.date, holiday.name]);
+  await persistDB();
+};
+
+export const deleteHoliday = async (date: string) => {
+  await initDB();
+  db.run(`DELETE FROM holidays WHERE date = ?`, [date]);
+  await persistDB();
+};
+
+export const getEmployeeYearlyAttendance = async (employeeId: string, year: number) => {
+  await initDB();
+  const res = db.exec(`SELECT mes, dia, code FROM attendance WHERE employee_id=? AND año=?`, [employeeId, year]);
+  if (res.length === 0) return [];
+  return res[0].values.map((row: any) => ({
+    mes: row[0] as number,
+    dia: row[1] as number,
+    code: row[2] as string
+  }));
 };
