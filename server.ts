@@ -5,13 +5,21 @@ import { WebSocketServer } from 'ws';
 import { createServer as createViteServer } from 'vite';
 import http from 'http';
 import path from 'path';
+import fs from 'fs';
 
 const PORT = 3000;
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
-const db = new Database('hotel_attendance.db');
+// Ensure data directory exists for Docker persistence
+const dataDir = path.join(process.cwd(), 'data');
+if (!fs.existsSync(dataDir)) {
+  fs.mkdirSync(dataDir, { recursive: true });
+}
+
+const dbPath = path.join(dataDir, 'hotel_attendance.db');
+const db = new Database(dbPath);
 
 // Initialize DB schema
 db.exec(`
@@ -55,6 +63,23 @@ db.exec(`
     name TEXT
   );
 `);
+
+// Migration: Ensure isLocked column exists in metadata
+try {
+  db.prepare('SELECT isLocked FROM metadata LIMIT 1').get();
+} catch (e) {
+  console.log('Adding isLocked column to metadata table...');
+  db.exec('ALTER TABLE metadata ADD COLUMN isLocked INTEGER DEFAULT NULL');
+}
+
+// Migration: Ensure hotel and departamento columns exist in employees
+try {
+  db.prepare('SELECT hotel, departamento FROM employees LIMIT 1').get();
+} catch (e) {
+  console.log('Adding hotel and departamento columns to employees table...');
+  db.exec('ALTER TABLE employees ADD COLUMN hotel TEXT');
+  db.exec('ALTER TABLE employees ADD COLUMN departamento TEXT');
+}
 
 // Add default admin if not exists
 const adminExists = db.prepare('SELECT * FROM users WHERE username = ?').get('admin');
@@ -243,44 +268,49 @@ app.get('/api/appdata', (req, res) => {
 });
 
 app.post('/api/appdata', (req, res) => {
-  const data = req.body;
-  const { hotel, departamento, año, mes, ultimaModificacion, isLocked } = data.metadata;
-  
-  const insertMeta = db.prepare('INSERT OR REPLACE INTO metadata (hotel, departamento, año, mes, ultimaModificacion, isLocked) VALUES (?, ?, ?, ?, ?, ?)');
-  insertMeta.run(hotel, departamento, año, mes, ultimaModificacion, isLocked ? 1 : 0);
-  
-  const insertEmp = db.prepare('INSERT OR REPLACE INTO employees (id, hotel, departamento, nombre, fechaAlta, fechaBaja, trial_active, trial_dias, trial_fechaFin) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
-  const insertAtt = db.prepare('INSERT OR REPLACE INTO attendance (employee_id, año, mes, dia, code, horas_extras) VALUES (?, ?, ?, ?, ?, ?)');
-  const deleteAtt = db.prepare('DELETE FROM attendance WHERE employee_id = ? AND año = ? AND mes = ?');
-  
-  const transaction = db.transaction(() => {
-    for (const emp of data.empleados) {
-      insertEmp.run(
-        emp.id, hotel, departamento, emp.nombre, emp.fechaAlta, emp.fechaBaja,
-        emp.periodoPrueba?.activo ? 1 : 0,
-        emp.periodoPrueba?.dias || 60,
-        emp.periodoPrueba?.fechaFin || null
-      );
-      
-      deleteAtt.run(emp.id, año, mes);
-      
-      const days = new Set([...Object.keys(emp.asistencia || {}), ...Object.keys(emp.horasExtras || {})]);
-      for (const dayStr of days) {
-        const day = parseInt(dayStr);
-        const code = emp.asistencia?.[day] || null;
-        const he = emp.horasExtras?.[day] || null;
-        if (code || he) {
-          insertAtt.run(emp.id, año, mes, day, code, he);
+  try {
+    const data = req.body;
+    const { hotel, departamento, año, mes, ultimaModificacion, isLocked } = data.metadata;
+    
+    const insertMeta = db.prepare('INSERT OR REPLACE INTO metadata (hotel, departamento, año, mes, ultimaModificacion, isLocked) VALUES (?, ?, ?, ?, ?, ?)');
+    insertMeta.run(hotel, departamento, año, mes, ultimaModificacion, isLocked ? 1 : 0);
+    
+    const insertEmp = db.prepare('INSERT OR REPLACE INTO employees (id, hotel, departamento, nombre, fechaAlta, fechaBaja, trial_active, trial_dias, trial_fechaFin) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    const insertAtt = db.prepare('INSERT OR REPLACE INTO attendance (employee_id, año, mes, dia, code, horas_extras) VALUES (?, ?, ?, ?, ?, ?)');
+    const deleteAtt = db.prepare('DELETE FROM attendance WHERE employee_id = ? AND año = ? AND mes = ?');
+    
+    const transaction = db.transaction(() => {
+      for (const emp of data.empleados) {
+        insertEmp.run(
+          emp.id, hotel, departamento, emp.nombre, emp.fechaAlta, emp.fechaBaja,
+          emp.periodoPrueba?.activo ? 1 : 0,
+          emp.periodoPrueba?.dias || 60,
+          emp.periodoPrueba?.fechaFin || null
+        );
+        
+        deleteAtt.run(emp.id, año, mes);
+        
+        const days = new Set([...Object.keys(emp.asistencia || {}), ...Object.keys(emp.horasExtras || {})]);
+        for (const dayStr of days) {
+          const day = parseInt(dayStr);
+          const code = emp.asistencia?.[day] || null;
+          const he = emp.horasExtras?.[day] || null;
+          if (code || he) {
+            insertAtt.run(emp.id, año, mes, day, code, he);
+          }
         }
       }
-    }
-  });
-  
-  transaction();
-  
-  // Broadcast to other clients that data for this specific quadrant changed
-  broadcastUpdate('APPDATA_CHANGED', { hotel, departamento, año, mes });
-  res.json({ success: true });
+    });
+    
+    transaction();
+    
+    // Broadcast to other clients that data for this specific quadrant changed
+    broadcastUpdate('APPDATA_CHANGED', { hotel, departamento, año, mes });
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error saving appdata:', error);
+    res.status(500).json({ success: false, error: String(error) });
+  }
 });
 
 app.get('/api/employees/recent', (req, res) => {
@@ -313,15 +343,23 @@ app.get('/api/employees/:id/attendance', (req, res) => {
 
 app.post('/api/employees/sync', (req, res) => {
   const emp = req.body;
-  db.prepare('UPDATE employees SET nombre = ?, fechaAlta = ?, fechaBaja = ?, trial_active = ?, trial_dias = ?, trial_fechaFin = ? WHERE id = ?')
-    .run(
-      emp.nombre, emp.fechaAlta, emp.fechaBaja,
-      emp.periodoPrueba?.activo ? 1 : 0,
-      emp.periodoPrueba?.dias || 60,
-      emp.periodoPrueba?.fechaFin || null,
-      emp.id
-    );
-  broadcastUpdate('APPDATA_CHANGED', { hotel: '', departamento: '', año: -1, mes: -1 }); // Trigger global reload
+  // Use INSERT OR REPLACE instead of UPDATE to handle new employees
+  db.prepare(`
+    INSERT OR REPLACE INTO employees 
+    (id, hotel, departamento, nombre, fechaAlta, fechaBaja, trial_active, trial_dias, trial_fechaFin) 
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    emp.id, 
+    emp.hotel, 
+    emp.departamento, 
+    emp.nombre, 
+    emp.fechaAlta, 
+    emp.fechaBaja,
+    emp.periodoPrueba?.activo ? 1 : 0,
+    emp.periodoPrueba?.dias || 60,
+    emp.periodoPrueba?.fechaFin || null
+  );
+  broadcastUpdate('APPDATA_CHANGED', { hotel: emp.hotel, departamento: emp.departamento, año: -1, mes: -1 }); // Trigger reload for this dept
   res.json({ success: true });
 });
 

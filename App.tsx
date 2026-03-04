@@ -50,11 +50,11 @@ const App: React.FC = () => {
           const { hotel, departamento, año, mes } = data.payload || { hotel: '', departamento: '', año: -1, mes: -1 };
           const current = currentViewRef.current;
           
-          if (
-            (current.hotel === hotel && current.departamento === departamento && current.año === año && current.mes === mes) ||
-            (año === -1 && mes === -1) // Global sync for this hotel/dept or all
-          ) {
-            // Reload data if we are viewing the same quadrant
+          const isSameQuadrant = current.hotel === hotel && current.departamento === departamento && current.año === año && current.mes === mes;
+          const isGlobalSyncForDept = (año === -1 && mes === -1) && (hotel === '' || (current.hotel === hotel && current.departamento === departamento));
+          
+          if (isSameQuadrant || isGlobalSyncForDept) {
+            // Reload data if we are viewing the same quadrant or a global change for this dept
             const updated = await loadFromStorage(current.hotel, current.departamento, current.año, current.mes);
             if (updated) {
               setAppData(updated);
