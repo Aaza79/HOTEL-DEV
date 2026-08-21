@@ -1,15 +1,32 @@
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { AppData, Employee } from '../types';
-import { CODES, MONTHS, SC_CODE } from '../constants';
+import { AppData, Employee, SalaryLevelRate } from '../types';
+import { CODES, MONTHS, SC_CODE, DEFAULT_SALARY_TABLE } from '../constants';
+import { getSalaryTable } from './storageService';
 
-const prepareDataForReport = (data: AppData, employees: Employee[]) => {
+const getRateForEmployee = (emp: Employee, salaryTable: SalaryLevelRate[]) => {
+  const levelKey = (emp.nivelSalarial || 'NIVEL 2').toUpperCase().trim();
+  const match = salaryTable.find(s => s.level.toUpperCase().trim() === levelKey || levelKey.includes(s.level.toUpperCase().trim()));
+  if (match) return match;
+  const defaultMatch = DEFAULT_SALARY_TABLE.find(s => s.level.toUpperCase().trim() === levelKey);
+  return defaultMatch || { level: emp.nivelSalarial || 'NIVEL 2', priceDayOff: 130, priceExtraHour: 16.25 };
+};
+
+const prepareDataForReport = (data: AppData, employees: Employee[], salaryTable: SalaryLevelRate[]) => {
   const { año, mes } = data.metadata;
   const daysInMonth = new Date(año, mes, 0).getDate();
   const headers = ['Empleado'];
   for (let i = 1; i <= daysInMonth; i++) headers.push(String(i));
-  headers.push('L. Trab', 'L. Disfr', 'Vacac', 'H. Ext');
+  headers.push('Nivel', 'L. Trab', 'Imp. LT', 'H. Ext', 'Imp. HE', 'Otras Ret.', 'Adelanto', 'TOTAL');
+
+  let sumCountLT = 0;
+  let sumImpLT = 0;
+  let sumTotalHE = 0;
+  let sumImpHE = 0;
+  let sumOtras = 0;
+  let sumAdelanto = 0;
+  let grandTotal = 0;
 
   const body = employees.map(emp => {
     const row: any[] = [emp.nombre];
@@ -35,11 +52,52 @@ const prepareDataForReport = (data: AppData, employees: Employee[]) => {
       }
       totalHE += emp.horasExtras?.[String(d)] || 0;
     }
-    row.push(String(countLT), String(countL), String(countV), String(totalHE));
+
+    const rate = getRateForEmployee(emp, salaryTable);
+    const impLT = countLT * rate.priceDayOff;
+    const impHE = totalHE * rate.priceExtraHour;
+    const otras = emp.otrasRetribuciones || 0;
+    const adelanto = emp.adelanto || 0;
+    const totalPercibir = impLT + impHE + otras - adelanto;
+
+    sumCountLT += countLT;
+    sumImpLT += impLT;
+    sumTotalHE += totalHE;
+    sumImpHE += impHE;
+    sumOtras += otras;
+    sumAdelanto += adelanto;
+    grandTotal += totalPercibir;
+
+    const nivelStr = emp.nivelSalarial ? emp.nivelSalarial.split(' - ')[0] : 'NIVEL 2';
+
+    row.push(
+      nivelStr,
+      String(countLT),
+      `${impLT.toFixed(2)} €`,
+      String(totalHE),
+      `${impHE.toFixed(2)} €`,
+      `${otras.toFixed(2)} €`,
+      adelanto > 0 ? `-${adelanto.toFixed(2)} €` : '0.00 €',
+      `${totalPercibir.toFixed(2)} €`
+    );
     return row;
   });
 
-  return { headers, body, daysInMonth };
+  // Summary Row with Totals
+  const totalRow: any[] = ['TOTALES'];
+  for (let i = 1; i <= daysInMonth; i++) totalRow.push('');
+  totalRow.push(
+    '',
+    String(sumCountLT),
+    `${sumImpLT.toFixed(2)} €`,
+    String(sumTotalHE),
+    `${sumImpHE.toFixed(2)} €`,
+    `${sumOtras.toFixed(2)} €`,
+    sumAdelanto > 0 ? `-${sumAdelanto.toFixed(2)} €` : '0.00 €',
+    `${grandTotal.toFixed(2)} €`
+  );
+
+  return { headers, body, totalRow, daysInMonth, grandTotal };
 };
 
 const calculateRatios = (data: AppData, employees: Employee[], daysInMonth: number) => {
@@ -68,8 +126,14 @@ const hexToRgb = (hex: string) => {
   return [parseInt(cleanHex.substring(0, 2), 16), parseInt(cleanHex.substring(2, 4), 16), parseInt(cleanHex.substring(4, 6), 16)];
 };
 
-export const generateExcelReport = (data: AppData, employees: Employee[]) => {
-  const { headers, body, daysInMonth } = prepareDataForReport(data, employees);
+export const generateExcelReport = async (data: AppData, employees: Employee[]) => {
+  let salaryTable = DEFAULT_SALARY_TABLE;
+  try {
+    const list = await getSalaryTable();
+    if (list && list.length > 0) salaryTable = list;
+  } catch (e) {}
+
+  const { headers, body, totalRow, daysInMonth } = prepareDataForReport(data, employees, salaryTable);
   const ratios = calculateRatios(data, employees, daysInMonth);
   
   // Legend Data for Excel
@@ -81,9 +145,13 @@ export const generateExcelReport = (data: AppData, employees: Employee[]) => {
   ];
 
   const wsData = [
-    [`CONTROL ASISTENCIA - ${data.metadata.hotel.toUpperCase()}`],
+    [`CONTROL ASISTENCIA Y RETRIBUCIONES - ${data.metadata.hotel.toUpperCase()}`],
     [`Dpto: ${data.metadata.departamento} | Período: ${MONTHS[data.metadata.mes - 1]} ${data.metadata.año}`],
-    [], headers, ...body, ['RATIO PERSONAL', ...ratios, '', '', '', ''],
+    [], 
+    headers, 
+    ...body, 
+    totalRow,
+    ['RATIO PERSONAL', ...ratios, '', '', '', '', '', '', '', ''],
     ...legendRows
   ];
   const ws = XLSX.utils.aoa_to_sheet(wsData);
@@ -93,18 +161,42 @@ export const generateExcelReport = (data: AppData, employees: Employee[]) => {
 };
 
 // Internal function to create the PDF document
-const createPDFDoc = (data: AppData, employees: Employee[]): jsPDF => {
-  const { headers, body, daysInMonth } = prepareDataForReport(data, employees);
+const createPDFDoc = async (data: AppData, employees: Employee[]): Promise<jsPDF> => {
+  let salaryTable = DEFAULT_SALARY_TABLE;
+  try {
+    const list = await getSalaryTable();
+    if (list && list.length > 0) salaryTable = list;
+  } catch (e) {}
+
+  const { headers, body, totalRow, daysInMonth } = prepareDataForReport(data, employees, salaryTable);
   const ratios = calculateRatios(data, employees, daysInMonth);
-  const finalBody = [...body, ['RATIO PERSONAL', ...ratios, '', '', '', '']];
+  const finalBody = [...body, totalRow, ['RATIO PERSONAL', ...ratios, '', '', '', '', '', '', '', '']];
   const doc = new jsPDF({ orientation: 'landscape' });
 
-  doc.text(`CONTROL - ${data.metadata.hotel} (${data.metadata.departamento})`, 14, 15);
+  doc.setFontSize(12);
+  doc.text(`CONTROL ASISTENCIA Y RETRIBUCIONES - ${data.metadata.hotel} (${data.metadata.departamento})`, 14, 12);
+  doc.setFontSize(9);
+  doc.text(`Período: ${MONTHS[data.metadata.mes - 1]} ${data.metadata.año}`, 14, 17);
+
   autoTable(doc, {
-    startY: 20, head: [headers], body: finalBody, theme: 'grid', styles: { fontSize: 6, cellPadding: 1, halign: 'center' },
+    startY: 20, 
+    head: [headers], 
+    body: finalBody, 
+    theme: 'grid', 
+    styles: { fontSize: 5.5, cellPadding: 0.8, halign: 'center' },
     didParseCell: (d) => {
-      if (d.section === 'body' && d.row.index === finalBody.length - 1) { d.cell.styles.fillColor = [40, 40, 40]; d.cell.styles.textColor = 255; }
-      if (d.section === 'body' && d.column.index > 0 && d.column.index <= daysInMonth && d.row.index < finalBody.length - 1) {
+      // Style Totals row (penultimate row)
+      if (d.section === 'body' && d.row.index === finalBody.length - 2) {
+        d.cell.styles.fillColor = [220, 230, 245];
+        d.cell.styles.textColor = [15, 23, 42];
+        d.cell.styles.fontStyle = 'bold';
+      }
+      // Style Ratio row (last row)
+      if (d.section === 'body' && d.row.index === finalBody.length - 1) { 
+        d.cell.styles.fillColor = [40, 40, 40]; 
+        d.cell.styles.textColor = 255; 
+      }
+      if (d.section === 'body' && d.column.index > 0 && d.column.index <= daysInMonth && d.row.index < finalBody.length - 2) {
         const val = d.cell.raw as string;
         if (val === 'SC') d.cell.styles.fillColor = [60, 60, 60];
         const c = CODES.find(x => x.code === val);
@@ -114,58 +206,53 @@ const createPDFDoc = (data: AppData, employees: Employee[]): jsPDF => {
   });
 
   // Draw Legend manually at bottom
-  let startY = (doc as any).lastAutoTable.finalY + 10;
+  let startY = (doc as any).lastAutoTable.finalY + 8;
   
-  // Check if we need a new page for legend
   if (startY > 180) {
     doc.addPage();
-    startY = 20;
+    startY = 15;
   }
 
-  doc.setFontSize(8);
+  doc.setFontSize(7.5);
   doc.text("LEYENDA:", 14, startY);
-  startY += 5;
+  startY += 4;
 
   let xPos = 14;
-  const itemsPerRow = 5;
+  const itemsPerRow = 6;
   let count = 0;
 
   [...CODES, SC_CODE].forEach((code) => {
       if (count > 0 && count % itemsPerRow === 0) {
           xPos = 14;
-          startY += 8;
+          startY += 6;
       }
 
-      // Draw Square Box
       const rgb = hexToRgb(code.bgColor);
       doc.setFillColor(rgb[0], rgb[1], rgb[2]);
-      doc.rect(xPos, startY - 3, 4, 4, 'F');
+      doc.rect(xPos, startY - 2.5, 3.5, 3.5, 'F');
       
-      // Draw Text
       doc.setTextColor(0);
-      doc.text(`${code.code} - ${code.name}`, xPos + 6, startY);
+      doc.text(`${code.code} - ${code.name}`, xPos + 5, startY);
       
-      xPos += 50; // Spacing
+      xPos += 45;
       count++;
   });
 
   return doc;
 };
 
-export const generatePDFReport = (data: AppData, employees: Employee[]) => {
-  const doc = createPDFDoc(data, employees);
-  doc.save(`Report_${data.metadata.hotel}.pdf`);
+export const generatePDFReport = async (data: AppData, employees: Employee[]) => {
+  const doc = await createPDFDoc(data, employees);
+  doc.save(`Report_${data.metadata.hotel}_${data.metadata.mes}.pdf`);
 };
 
 export const sharePDFReport = async (data: AppData, employees: Employee[]) => {
-  const doc = createPDFDoc(data, employees);
+  const doc = await createPDFDoc(data, employees);
   const blob = doc.output('blob');
   const fileName = `Reporte_${data.metadata.departamento}_${MONTHS[data.metadata.mes - 1]}.pdf`;
   
-  // Create a File object from the blob
   const file = new File([blob], fileName, { type: 'application/pdf' });
 
-  // 1. Try to use Web Share API (Mobile & supported browsers)
   if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
     try {
       await navigator.share({
@@ -178,15 +265,11 @@ export const sharePDFReport = async (data: AppData, employees: Employee[]) => {
       if ((error as any).name !== 'AbortError') {
         console.error('Error sharing:', error);
       } else {
-        return; // User cancelled share
+        return;
       }
     }
   }
 
-  // 2. Fallback: Download file + Open Mail Client
-  // Note: Mailto cannot attach files programmatically due to browser security.
-  // We download the file and ask user to attach it.
-  
   doc.save(fileName);
   
   const subject = encodeURIComponent(`Informe Asistencia: ${data.metadata.departamento} - ${MONTHS[data.metadata.mes - 1]}`);

@@ -1,4 +1,4 @@
-import { AppData, Employee, User } from '../types';
+import { AppData, Employee, User, SalaryLevelRate } from '../types';
 
 const API_URL = '/api';
 
@@ -97,11 +97,11 @@ export const deleteDataByYear = async (year: number) => {
   await fetch(`${API_URL}/data/year/${year}`, { method: 'DELETE' });
 };
 
-export const syncEmployeeAcrossMonths = async (hotel: string, dept: string, employee: Employee) => {
+export const syncEmployeeAcrossMonths = async (hotel: string, dept: string, employee: Employee, año?: number, mes?: number) => {
   await fetch(`${API_URL}/employees/sync`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...employee, hotel, departamento: dept })
+    body: JSON.stringify({ ...employee, hotel, departamento: dept, año, mes })
   });
 };
 
@@ -112,4 +112,17 @@ export const deleteEmployeeAcrossMonths = async (hotel: string, dept: string, em
 export const getEmployeeYearlyAttendance = async (employeeId: string, year: number) => {
   const res = await fetch(`${API_URL}/employees/${employeeId}/attendance?year=${year}`);
   return res.json();
+};
+
+export const getSalaryTable = async (): Promise<SalaryLevelRate[]> => {
+  const res = await fetch(`${API_URL}/salary-table`);
+  return res.json();
+};
+
+export const saveSalaryTable = async (rates: SalaryLevelRate[]) => {
+  await fetch(`${API_URL}/salary-table`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(rates)
+  });
 };

@@ -47,6 +47,24 @@ export const SC_CODE: AttendanceCode = {
   key: "-"
 };
 
+export const DEFAULT_SALARY_TABLE = [
+  { level: "NIVEL 1", priceDayOff: 140, priceExtraHour: 17.5 },
+  { level: "NIVEL 2", priceDayOff: 130, priceExtraHour: 16.25 },
+  { level: "NIVEL 3", priceDayOff: 120, priceExtraHour: 15 },
+  { level: "NIVEL 4", priceDayOff: 90, priceExtraHour: 11.25 },
+  { level: "NIVEL 5", priceDayOff: 75, priceExtraHour: 10 },
+  { level: "NIVEL 6", priceDayOff: 60, priceExtraHour: 7.5 }
+];
+
+export const SALARY_LEVELS = [
+  "NIVEL 1",
+  "NIVEL 2",
+  "NIVEL 3",
+  "NIVEL 4",
+  "NIVEL 5",
+  "NIVEL 6"
+];
+
 export const INITIAL_EMPLOYEES_MOCK = [
   {
     id: "emp_ejemplo_1",
@@ -54,6 +72,9 @@ export const INITIAL_EMPLOYEES_MOCK = [
     fechaAlta: "2024-01-15",
     fechaBaja: null,
     periodoPrueba: { activo: false, dias: 0, fechaFin: null },
+    nivelSalarial: "NIVEL 3",
+    otrasRetribuciones: 150,
+    adelanto: 0,
     asistencia: { "1": "1", "2": "1", "3": "L", "4": "1" }
   },
   {
@@ -62,6 +83,9 @@ export const INITIAL_EMPLOYEES_MOCK = [
     fechaAlta: "2025-05-01",
     fechaBaja: null,
     periodoPrueba: { activo: true, dias: 60, fechaFin: "2025-06-30" },
+    nivelSalarial: "NIVEL 2",
+    otrasRetribuciones: 200,
+    adelanto: 50,
     asistencia: { "1": "V", "2": "V", "3": "1" }
   },
   {
@@ -70,6 +94,10 @@ export const INITIAL_EMPLOYEES_MOCK = [
     fechaAlta: "2023-06-01",
     fechaBaja: "2025-06-15",
     periodoPrueba: { activo: false, dias: 0, fechaFin: null },
+    nivelSalarial: "NIVEL 4",
+    otrasRetribuciones: 0,
+    adelanto: 0,
     asistencia: { "1": "1", "2": "1", "3": "1", "16": "SC" }
   }
 ];
+

@@ -41,7 +41,12 @@ db.exec(`
     fechaBaja TEXT,
     trial_active INTEGER,
     trial_dias INTEGER,
-    trial_fechaFin TEXT
+    trial_fechaFin TEXT,
+    nivel_salarial TEXT,
+    otras_retribuciones REAL,
+    adelanto REAL,
+    adelanto_modo TEXT,
+    adelanto_dias REAL
   );
   CREATE TABLE IF NOT EXISTS attendance (
     employee_id TEXT,
@@ -56,13 +61,79 @@ db.exec(`
     username TEXT PRIMARY KEY,
     password TEXT,
     role TEXT,
-    allowedDepartments TEXT
+    allowedDepartments TEXT,
+    allowedHotels TEXT
   );
   CREATE TABLE IF NOT EXISTS holidays (
     date TEXT PRIMARY KEY,
     name TEXT
   );
+  CREATE TABLE IF NOT EXISTS salary_table (
+    level TEXT PRIMARY KEY,
+    priceDayOff REAL,
+    priceExtraHour REAL
+  );
+  CREATE TABLE IF NOT EXISTS monthly_advances (
+    employee_id TEXT,
+    año INTEGER,
+    mes INTEGER,
+    adelanto REAL DEFAULT 0,
+    PRIMARY KEY (employee_id, año, mes)
+  );
 `);
+
+// Migration: Ensure monthly_advances table exists
+try {
+  db.prepare('SELECT count(*) as count FROM monthly_advances LIMIT 1').get();
+} catch (e) {
+  console.log('Creating monthly_advances table...');
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS monthly_advances (
+      employee_id TEXT,
+      año INTEGER,
+      mes INTEGER,
+      adelanto REAL DEFAULT 0,
+      PRIMARY KEY (employee_id, año, mes)
+    );
+  `);
+}
+
+// Initial migration: If monthly_advances is empty, migrate existing non-zero advances from employees table into their existing metadata months
+try {
+  const advCount = db.prepare('SELECT count(*) as count FROM monthly_advances').get() as { count: number };
+  if (advCount.count === 0) {
+    const empsWithAdv = db.prepare('SELECT id, adelanto, hotel, departamento FROM employees WHERE adelanto > 0').all() as any[];
+    if (empsWithAdv.length > 0) {
+      const insertAdv = db.prepare('INSERT OR IGNORE INTO monthly_advances (employee_id, año, mes, adelanto) VALUES (?, ?, ?, ?)');
+      for (const emp of empsWithAdv) {
+        const months = db.prepare('SELECT año, mes FROM metadata WHERE hotel = ? AND departamento = ?').all(emp.hotel, emp.departamento) as any[];
+        for (const m of months) {
+          insertAdv.run(emp.id, m.año, m.mes, emp.adelanto);
+        }
+      }
+    }
+  }
+} catch (e) {
+  console.error('Migration error for monthly advances:', e);
+}
+
+// Default salary table seed
+const defaultSalaries = [
+  { level: "NIVEL 1", priceDayOff: 140, priceExtraHour: 17.5 },
+  { level: "NIVEL 2", priceDayOff: 130, priceExtraHour: 16.25 },
+  { level: "NIVEL 3", priceDayOff: 120, priceExtraHour: 15 },
+  { level: "NIVEL 4", priceDayOff: 90, priceExtraHour: 11.25 },
+  { level: "NIVEL 5", priceDayOff: 75, priceExtraHour: 10 },
+  { level: "NIVEL 6", priceDayOff: 60, priceExtraHour: 7.5 }
+];
+
+const salaryCount = db.prepare('SELECT count(*) as count FROM salary_table').get() as { count: number };
+if (salaryCount.count === 0) {
+  const insertSalary = db.prepare('INSERT INTO salary_table (level, priceDayOff, priceExtraHour) VALUES (?, ?, ?)');
+  for (const s of defaultSalaries) {
+    insertSalary.run(s.level, s.priceDayOff, s.priceExtraHour);
+  }
+}
 
 // Migration: Ensure isLocked column exists in metadata
 try {
@@ -81,15 +152,39 @@ try {
   db.exec('ALTER TABLE employees ADD COLUMN departamento TEXT');
 }
 
+// Migration: Ensure salary and advance columns exist in employees
+try {
+  db.prepare('SELECT nivel_salarial, otras_retribuciones, adelanto, adelanto_modo, adelanto_dias FROM employees LIMIT 1').get();
+} catch (e) {
+  console.log('Adding salary and advance columns to employees table...');
+  try { db.exec('ALTER TABLE employees ADD COLUMN nivel_salarial TEXT'); } catch(err){}
+  try { db.exec('ALTER TABLE employees ADD COLUMN otras_retribuciones REAL DEFAULT 0'); } catch(err){}
+  try { db.exec('ALTER TABLE employees ADD COLUMN adelanto REAL DEFAULT 0'); } catch(err){}
+  try { db.exec('ALTER TABLE employees ADD COLUMN adelanto_modo TEXT DEFAULT "dias_libres"'); } catch(err){}
+  try { db.exec('ALTER TABLE employees ADD COLUMN adelanto_dias REAL DEFAULT 0'); } catch(err){}
+}
+
+// Migration: Ensure allowedHotels column exists in users
+try {
+  db.prepare('SELECT allowedHotels FROM users LIMIT 1').get();
+} catch (e) {
+  console.log('Adding allowedHotels column to users table...');
+  db.exec('ALTER TABLE users ADD COLUMN allowedHotels TEXT DEFAULT \'["ALL"]\'');
+  db.prepare('UPDATE users SET allowedHotels = ? WHERE allowedHotels IS NULL').run('["ALL"]');
+}
+
 // Add default admin if not exists
 const adminExists = db.prepare('SELECT * FROM users WHERE username = ?').get('admin');
 if (!adminExists) {
-  db.prepare('INSERT INTO users (username, password, role, allowedDepartments) VALUES (?, ?, ?, ?)').run('admin', '1579@Chemas', 'admin', '["ALL"]');
+  db.prepare('INSERT INTO users (username, password, role, allowedDepartments, allowedHotels) VALUES (?, ?, ?, ?, ?)').run('admin', '1579@Chemas', 'admin', '["ALL"]', '["ALL"]');
 } else {
-  // Update password if it's the old default
+  // Update password if it's the old default, and ensure allowedHotels is set
   const adminUser = adminExists as any;
   if (adminUser.password === 'admin123') {
     db.prepare('UPDATE users SET password = ? WHERE username = ?').run('1579@Chemas', 'admin');
+  }
+  if (!adminUser.allowedHotels) {
+    db.prepare('UPDATE users SET allowedHotels = ? WHERE username = ?').run('["ALL"]', 'admin');
   }
 }
 
@@ -118,24 +213,32 @@ const broadcastUpdate = (type: string, payload?: any) => {
 
 // Users
 app.get('/api/users', (req, res) => {
-  const users = db.prepare('SELECT username, role, allowedDepartments FROM users').all();
-  res.json(users.map((u: any) => ({ ...u, allowedDepartments: JSON.parse(u.allowedDepartments) })));
+  const users = db.prepare('SELECT username, role, allowedDepartments, allowedHotels FROM users').all();
+  res.json(users.map((u: any) => ({
+    username: u.username,
+    role: u.role,
+    allowedDepartments: u.allowedDepartments ? JSON.parse(u.allowedDepartments) : ['ALL'],
+    allowedHotels: u.allowedHotels ? JSON.parse(u.allowedHotels) : ['ALL']
+  })));
 });
 
 app.post('/api/users', (req, res) => {
   const { user, password } = req.body;
   const existing = db.prepare('SELECT * FROM users WHERE username = ?').get(user.username);
+  const allowedDeptsJson = JSON.stringify(user.allowedDepartments || ['ALL']);
+  const allowedHotelsJson = JSON.stringify(user.allowedHotels || ['ALL']);
+
   if (existing) {
     if (password) {
-      db.prepare('UPDATE users SET password = ?, role = ?, allowedDepartments = ? WHERE username = ?')
-        .run(password, user.role, JSON.stringify(user.allowedDepartments), user.username);
+      db.prepare('UPDATE users SET password = ?, role = ?, allowedDepartments = ?, allowedHotels = ? WHERE username = ?')
+        .run(password, user.role, allowedDeptsJson, allowedHotelsJson, user.username);
     } else {
-      db.prepare('UPDATE users SET role = ?, allowedDepartments = ? WHERE username = ?')
-        .run(user.role, JSON.stringify(user.allowedDepartments), user.username);
+      db.prepare('UPDATE users SET role = ?, allowedDepartments = ?, allowedHotels = ? WHERE username = ?')
+        .run(user.role, allowedDeptsJson, allowedHotelsJson, user.username);
     }
   } else {
-    db.prepare('INSERT INTO users (username, password, role, allowedDepartments) VALUES (?, ?, ?, ?)')
-      .run(user.username, password || '', user.role, JSON.stringify(user.allowedDepartments));
+    db.prepare('INSERT INTO users (username, password, role, allowedDepartments, allowedHotels) VALUES (?, ?, ?, ?, ?)')
+      .run(user.username, password || '', user.role, allowedDeptsJson, allowedHotelsJson);
   }
   broadcastUpdate('USERS_CHANGED');
   res.json({ success: true });
@@ -156,7 +259,8 @@ app.post('/api/login', (req, res) => {
       user: {
         username: user.username,
         role: user.role,
-        allowedDepartments: JSON.parse(user.allowedDepartments)
+        allowedDepartments: user.allowedDepartments ? JSON.parse(user.allowedDepartments) : ['ALL'],
+        allowedHotels: user.allowedHotels ? JSON.parse(user.allowedHotels) : ['ALL']
       }
     });
   } else {
@@ -189,6 +293,29 @@ app.delete('/api/holidays/:date', (req, res) => {
   res.json({ success: true });
 });
 
+// Salary Table
+app.get('/api/salary-table', (req, res) => {
+  const rows = db.prepare('SELECT level, priceDayOff, priceExtraHour FROM salary_table ORDER BY level ASC').all();
+  if (!rows || rows.length === 0) {
+    res.json(defaultSalaries);
+  } else {
+    res.json(rows);
+  }
+});
+
+app.post('/api/salary-table', (req, res) => {
+  const rates = req.body; // Array of { level, priceDayOff, priceExtraHour }
+  const insert = db.prepare('INSERT OR REPLACE INTO salary_table (level, priceDayOff, priceExtraHour) VALUES (?, ?, ?)');
+  const transaction = db.transaction(() => {
+    for (const r of rates) {
+      insert.run(r.level, Number(r.priceDayOff) || 0, Number(r.priceExtraHour) || 0);
+    }
+  });
+  transaction();
+  broadcastUpdate('SALARY_TABLE_CHANGED');
+  res.json({ success: true });
+});
+
 // Months and Locks
 app.get('/api/months', (req, res) => {
   const months = db.prepare('SELECT hotel, departamento, año, mes, isLocked FROM metadata ORDER BY año DESC, mes DESC').all();
@@ -208,6 +335,7 @@ app.delete('/api/data/year/:year', (req, res) => {
   const year = req.params.year;
   db.prepare('DELETE FROM metadata WHERE año = ?').run(year);
   db.prepare('DELETE FROM attendance WHERE año = ?').run(year);
+  db.prepare('DELETE FROM monthly_advances WHERE año = ?').run(year);
   db.prepare('DELETE FROM holidays WHERE date LIKE ?').run(`${year}-%`);
   broadcastUpdate('DATA_CHANGED');
   res.json({ success: true });
@@ -216,9 +344,11 @@ app.delete('/api/data/year/:year', (req, res) => {
 // App Data (Quadrant)
 app.get('/api/appdata', (req, res) => {
   const { hotel, dept, year, month } = req.query;
+  const y = parseInt(year as string);
+  const m = parseInt(month as string);
   
   const metadata: any = db.prepare('SELECT * FROM metadata WHERE hotel = ? AND departamento = ? AND año = ? AND mes = ?')
-    .get(hotel, dept, year, month);
+    .get(hotel, dept, y, m);
     
   if (!metadata) {
     res.json(null);
@@ -226,10 +356,11 @@ app.get('/api/appdata', (req, res) => {
   }
   
   const employees = db.prepare('SELECT * FROM employees WHERE hotel = ? AND departamento = ?').all(hotel, dept);
+  const getAdv = db.prepare('SELECT adelanto FROM monthly_advances WHERE employee_id = ? AND año = ? AND mes = ?');
   
   const resultEmployees = employees.map((emp: any) => {
     const attendance = db.prepare('SELECT dia, code, horas_extras FROM attendance WHERE employee_id = ? AND año = ? AND mes = ?')
-      .all(emp.id, year, month);
+      .all(emp.id, y, m);
       
     const asistencia: any = {};
     const horasExtras: any = {};
@@ -238,6 +369,9 @@ app.get('/api/appdata', (req, res) => {
       if (att.code) asistencia[att.dia] = att.code;
       if (att.horas_extras) horasExtras[att.dia] = att.horas_extras;
     });
+
+    const advRow: any = getAdv.get(emp.id, y, m);
+    const monthAdelanto = advRow ? (Number(advRow.adelanto) || 0) : 0;
     
     return {
       id: emp.id,
@@ -249,6 +383,9 @@ app.get('/api/appdata', (req, res) => {
         dias: emp.trial_dias,
         fechaFin: emp.trial_fechaFin
       },
+      nivelSalarial: emp.nivel_salarial || '',
+      otrasRetribuciones: emp.otras_retribuciones ?? 0,
+      adelanto: monthAdelanto,
       asistencia,
       horasExtras
     };
@@ -271,11 +408,18 @@ app.post('/api/appdata', (req, res) => {
   try {
     const data = req.body;
     const { hotel, departamento, año, mes, ultimaModificacion, isLocked } = data.metadata;
+    const y = parseInt(año);
+    const m = parseInt(mes);
     
     const insertMeta = db.prepare('INSERT OR REPLACE INTO metadata (hotel, departamento, año, mes, ultimaModificacion, isLocked) VALUES (?, ?, ?, ?, ?, ?)');
-    insertMeta.run(hotel, departamento, año, mes, ultimaModificacion, isLocked ? 1 : 0);
+    insertMeta.run(hotel, departamento, y, m, ultimaModificacion, isLocked ? 1 : 0);
     
-    const insertEmp = db.prepare('INSERT OR REPLACE INTO employees (id, hotel, departamento, nombre, fechaAlta, fechaBaja, trial_active, trial_dias, trial_fechaFin) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    const insertEmp = db.prepare(`
+      INSERT OR REPLACE INTO employees 
+      (id, hotel, departamento, nombre, fechaAlta, fechaBaja, trial_active, trial_dias, trial_fechaFin, nivel_salarial, otras_retribuciones, adelanto) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const insertMonthlyAdv = db.prepare('INSERT OR REPLACE INTO monthly_advances (employee_id, año, mes, adelanto) VALUES (?, ?, ?, ?)');
     const insertAtt = db.prepare('INSERT OR REPLACE INTO attendance (employee_id, año, mes, dia, code, horas_extras) VALUES (?, ?, ?, ?, ?, ?)');
     const deleteAtt = db.prepare('DELETE FROM attendance WHERE employee_id = ? AND año = ? AND mes = ?');
     
@@ -285,10 +429,16 @@ app.post('/api/appdata', (req, res) => {
           emp.id, hotel, departamento, emp.nombre, emp.fechaAlta, emp.fechaBaja,
           emp.periodoPrueba?.activo ? 1 : 0,
           emp.periodoPrueba?.dias || 60,
-          emp.periodoPrueba?.fechaFin || null
+          emp.periodoPrueba?.fechaFin || null,
+          emp.nivelSalarial || '',
+          emp.otrasRetribuciones ?? 0,
+          0 // Base default in employees table is 0; adelanto is month-specific
         );
+
+        // Store advance exclusively for this specific month
+        insertMonthlyAdv.run(emp.id, y, m, Number(emp.adelanto) || 0);
         
-        deleteAtt.run(emp.id, año, mes);
+        deleteAtt.run(emp.id, y, m);
         
         const days = new Set([...Object.keys(emp.asistencia || {}), ...Object.keys(emp.horasExtras || {})]);
         for (const dayStr of days) {
@@ -296,7 +446,7 @@ app.post('/api/appdata', (req, res) => {
           const code = emp.asistencia?.[day] || null;
           const he = emp.horasExtras?.[day] || null;
           if (code || he) {
-            insertAtt.run(emp.id, año, mes, day, code, he);
+            insertAtt.run(emp.id, y, m, day, code, he);
           }
         }
       }
@@ -305,7 +455,7 @@ app.post('/api/appdata', (req, res) => {
     transaction();
     
     // Broadcast to other clients that data for this specific quadrant changed
-    broadcastUpdate('APPDATA_CHANGED', { hotel, departamento, año, mes });
+    broadcastUpdate('APPDATA_CHANGED', { hotel, departamento, año: y, mes: m });
     res.json({ success: true });
   } catch (error) {
     console.error('Error saving appdata:', error);
@@ -327,6 +477,9 @@ app.get('/api/employees/recent', (req, res) => {
       dias: emp.trial_dias,
       fechaFin: emp.trial_fechaFin
     },
+    nivelSalarial: emp.nivel_salarial || '',
+    otrasRetribuciones: emp.otras_retribuciones ?? 0,
+    adelanto: 0, // Adelanto starts as 0 for new or unassigned months
     asistencia: {},
     horasExtras: {}
   }));
@@ -343,11 +496,13 @@ app.get('/api/employees/:id/attendance', (req, res) => {
 
 app.post('/api/employees/sync', (req, res) => {
   const emp = req.body;
-  // Use INSERT OR REPLACE instead of UPDATE to handle new employees
+  const y = emp.año ? parseInt(emp.año) : null;
+  const m = emp.mes ? parseInt(emp.mes) : null;
+
   db.prepare(`
     INSERT OR REPLACE INTO employees 
-    (id, hotel, departamento, nombre, fechaAlta, fechaBaja, trial_active, trial_dias, trial_fechaFin) 
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    (id, hotel, departamento, nombre, fechaAlta, fechaBaja, trial_active, trial_dias, trial_fechaFin, nivel_salarial, otras_retribuciones, adelanto) 
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     emp.id, 
     emp.hotel, 
@@ -357,8 +512,17 @@ app.post('/api/employees/sync', (req, res) => {
     emp.fechaBaja,
     emp.periodoPrueba?.activo ? 1 : 0,
     emp.periodoPrueba?.dias || 60,
-    emp.periodoPrueba?.fechaFin || null
+    emp.periodoPrueba?.fechaFin || null,
+    emp.nivelSalarial || '',
+    emp.otrasRetribuciones ?? 0,
+    0
   );
+
+  if (y && m) {
+    db.prepare('INSERT OR REPLACE INTO monthly_advances (employee_id, año, mes, adelanto) VALUES (?, ?, ?, ?)')
+      .run(emp.id, y, m, Number(emp.adelanto) || 0);
+  }
+
   broadcastUpdate('APPDATA_CHANGED', { hotel: emp.hotel, departamento: emp.departamento, año: -1, mes: -1 }); // Trigger reload for this dept
   res.json({ success: true });
 });
@@ -367,6 +531,7 @@ app.delete('/api/employees/:id/sync', (req, res) => {
   const { id } = req.params;
   db.prepare('DELETE FROM employees WHERE id = ?').run(id);
   db.prepare('DELETE FROM attendance WHERE employee_id = ?').run(id);
+  db.prepare('DELETE FROM monthly_advances WHERE employee_id = ?').run(id);
   broadcastUpdate('APPDATA_CHANGED', { hotel: '', departamento: '', año: -1, mes: -1 }); // Trigger reload
   res.json({ success: true });
 });
@@ -392,6 +557,7 @@ app.get('/api/appdata/previous', (req, res) => {
   }
   
   const employees = db.prepare('SELECT * FROM employees WHERE hotel = ? AND departamento = ?').all(hotel, dept);
+  const getAdv = db.prepare('SELECT adelanto FROM monthly_advances WHERE employee_id = ? AND año = ? AND mes = ?');
   
   const resultEmployees = employees.map((emp: any) => {
     const attendance = db.prepare('SELECT dia, code, horas_extras FROM attendance WHERE employee_id = ? AND año = ? AND mes = ?')
@@ -404,6 +570,9 @@ app.get('/api/appdata/previous', (req, res) => {
       if (att.code) asistencia[att.dia] = att.code;
       if (att.horas_extras) horasExtras[att.dia] = att.horas_extras;
     });
+
+    const advRow: any = getAdv.get(emp.id, prevYear, prevMonth);
+    const monthAdelanto = advRow ? (Number(advRow.adelanto) || 0) : 0;
     
     return {
       id: emp.id,
@@ -415,6 +584,9 @@ app.get('/api/appdata/previous', (req, res) => {
         dias: emp.trial_dias,
         fechaFin: emp.trial_fechaFin
       },
+      nivelSalarial: emp.nivel_salarial || '',
+      otrasRetribuciones: emp.otras_retribuciones ?? 0,
+      adelanto: monthAdelanto,
       asistencia,
       horasExtras
     };

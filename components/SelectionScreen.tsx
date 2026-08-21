@@ -19,10 +19,25 @@ const SelectionScreen: React.FC<SelectionScreenProps> = ({ onStart, onOpenManual
   const currentYear = new Date().getFullYear();
   const years = Array.from({ length: 8 }, (_, i) => currentYear - 2 + i); // 2023 - 2030
 
+  // Filter hotels based on permissions
+  const availableHotels = (!currentUser.allowedHotels || currentUser.allowedHotels.includes('ALL'))
+    ? HOTELS
+    : HOTELS.filter(h => currentUser.allowedHotels.includes(h));
+
   // Filter departments based on permissions
-  const availableDepartments = currentUser.allowedDepartments.includes('ALL') 
+  const availableDepartments = (!currentUser.allowedDepartments || currentUser.allowedDepartments.includes('ALL'))
     ? DEPARTMENTS 
     : DEPARTMENTS.filter(d => currentUser.allowedDepartments.includes(d));
+
+  // Auto-select if only 1 hotel or department
+  React.useEffect(() => {
+    if (availableHotels.length === 1 && !hotel) {
+      setHotel(availableHotels[0]);
+    }
+    if (availableDepartments.length === 1 && !dept) {
+      setDept(availableDepartments[0]);
+    }
+  }, [availableHotels, availableDepartments]);
 
   const handleStart = (e: React.FormEvent) => {
     e.preventDefault();
@@ -68,8 +83,11 @@ const SelectionScreen: React.FC<SelectionScreenProps> = ({ onStart, onOpenManual
               className="w-full bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white rounded-xl py-3.5 px-4 focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all text-sm outline-none"
             >
               <option value="" disabled>-- Selecciona un hotel --</option>
-              {HOTELS.map(h => <option key={h} value={h}>{h}</option>)}
+              {availableHotels.map(h => <option key={h} value={h}>{h}</option>)}
             </select>
+            {availableHotels.length === 0 && (
+              <p className="text-xs text-red-500 ml-1">Sin hoteles asignados.</p>
+            )}
           </div>
 
           <div className="space-y-1.5">

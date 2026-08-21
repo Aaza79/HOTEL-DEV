@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  hotel-quadrant:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: hotel_attendance_app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      # Persistencia de la base de datos SQLite y datos del hotel
+      - ./data:/app/data
+    environment:
+      - NODE_ENV=production

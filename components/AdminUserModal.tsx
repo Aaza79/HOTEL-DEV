@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { User } from '../types';
-import { DEPARTMENTS, MONTHS } from '../constants';
-import { getAllUsers, saveUser, deleteUser, getAllMonths, toggleMonthLock, getHolidays, saveHoliday, deleteHoliday, Holiday, deleteDataByYear } from '../services/storageService';
+import { User, SalaryLevelRate } from '../types';
+import { HOTELS, DEPARTMENTS, MONTHS, DEFAULT_SALARY_TABLE } from '../constants';
+import { getAllUsers, saveUser, deleteUser, getAllMonths, toggleMonthLock, getHolidays, saveHoliday, deleteHoliday, Holiday, deleteDataByYear, getSalaryTable, saveSalaryTable } from '../services/storageService';
 
 interface AdminUserModalProps {
   isOpen: boolean;
@@ -18,12 +18,15 @@ interface MonthData {
 }
 
 const AdminUserModal: React.FC<AdminUserModalProps> = ({ isOpen, onClose, currentUser }) => {
-  const [activeTab, setActiveTab] = useState<'users' | 'months' | 'holidays' | 'database'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'months' | 'holidays' | 'salary' | 'database'>('users');
   const [users, setUsers] = useState<User[]>([]);
   const [months, setMonths] = useState<MonthData[]>([]);
   const [holidays, setHolidays] = useState<Holiday[]>([]);
+  const [salaryTable, setSalaryTable] = useState<SalaryLevelRate[]>(DEFAULT_SALARY_TABLE);
+  const [isSavingSalary, setIsSavingSalary] = useState(false);
+  const [salarySaveSuccess, setSalarySaveSuccess] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
-  const [formUser, setFormUser] = useState<User>({ username: '', role: 'user', allowedDepartments: [] });
+  const [formUser, setFormUser] = useState<User>({ username: '', role: 'user', allowedHotels: ['ALL'], allowedDepartments: [] });
   const [formPassword, setFormPassword] = useState('');
   
   const [formHoliday, setFormHoliday] = useState<Holiday>({ date: '', name: '' });
@@ -36,6 +39,7 @@ const AdminUserModal: React.FC<AdminUserModalProps> = ({ isOpen, onClose, curren
       loadUsers();
       loadMonths();
       loadHolidays();
+      loadSalaryTable();
     }
   }, [isOpen]);
 
@@ -52,6 +56,44 @@ const AdminUserModal: React.FC<AdminUserModalProps> = ({ isOpen, onClose, curren
   const loadHolidays = async () => {
     const list = await getHolidays();
     setHolidays(list);
+  };
+
+  const loadSalaryTable = async () => {
+    try {
+      const list = await getSalaryTable();
+      if (list && list.length > 0) {
+        setSalaryTable(list);
+      }
+    } catch (e) {
+      console.error('Error loading salary table:', e);
+    }
+  };
+
+  const handleSalaryRateChange = (level: string, field: 'priceDayOff' | 'priceExtraHour', value: string) => {
+    const normalized = value.replace(',', '.');
+    const num = parseFloat(normalized);
+    setSalaryTable(prev => prev.map(item => {
+      if (item.level === level) {
+        return {
+          ...item,
+          [field]: isNaN(num) ? 0 : num
+        };
+      }
+      return item;
+    }));
+  };
+
+  const handleSaveSalaryTable = async () => {
+    setIsSavingSalary(true);
+    try {
+      await saveSalaryTable(salaryTable);
+      setSalarySaveSuccess(true);
+      setTimeout(() => setSalarySaveSuccess(false), 2500);
+    } catch (e) {
+      alert('Error al guardar la tabla salarial');
+    } finally {
+      setIsSavingSalary(false);
+    }
   };
 
   const handleToggleLock = async (m: MonthData) => {
@@ -105,13 +147,18 @@ const AdminUserModal: React.FC<AdminUserModalProps> = ({ isOpen, onClose, curren
   };
 
   const handleEdit = (u: User) => {
-    setFormUser(u);
+    setFormUser({
+      username: u.username,
+      role: u.role,
+      allowedHotels: u.allowedHotels || ['ALL'],
+      allowedDepartments: u.allowedDepartments || ['ALL']
+    });
     setFormPassword('');
     setIsEditing(true);
   };
 
   const handleNew = () => {
-    setFormUser({ username: '', role: 'user', allowedDepartments: [] });
+    setFormUser({ username: '', role: 'user', allowedHotels: ['ALL'], allowedDepartments: [] });
     setFormPassword('');
     setIsEditing(true);
   };
@@ -130,9 +177,15 @@ const AdminUserModal: React.FC<AdminUserModalProps> = ({ isOpen, onClose, curren
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formUser.username) return;
-    if (formUser.allowedDepartments.length === 0 && formUser.role !== 'admin') {
-      alert("Debes seleccionar al menos un departamento.");
-      return;
+    if (formUser.role !== 'admin') {
+      if (!formUser.allowedHotels || formUser.allowedHotels.length === 0) {
+        alert("Debes seleccionar al menos un hotel.");
+        return;
+      }
+      if (!formUser.allowedDepartments || formUser.allowedDepartments.length === 0) {
+        alert("Debes seleccionar al menos un departamento.");
+        return;
+      }
     }
     
     // For new users, password is required
@@ -147,17 +200,31 @@ const AdminUserModal: React.FC<AdminUserModalProps> = ({ isOpen, onClose, curren
     loadUsers();
   };
 
+  const toggleHotel = (hotel: string) => {
+    if (hotel === 'ALL') {
+      setFormUser({ ...formUser, allowedHotels: ['ALL'] });
+    } else {
+      let current = (formUser.allowedHotels || []).filter(h => h !== 'ALL');
+      if (current.includes(hotel)) {
+        current = current.filter(h => h !== hotel);
+      } else {
+        current.push(hotel);
+      }
+      setFormUser({ ...formUser, allowedHotels: current.length === 0 ? ['ALL'] : current });
+    }
+  };
+
   const toggleDept = (dept: string) => {
     if (dept === 'ALL') {
       setFormUser({ ...formUser, allowedDepartments: ['ALL'] });
     } else {
-      let current = formUser.allowedDepartments.filter(d => d !== 'ALL');
+      let current = (formUser.allowedDepartments || []).filter(d => d !== 'ALL');
       if (current.includes(dept)) {
         current = current.filter(d => d !== dept);
       } else {
         current.push(dept);
       }
-      setFormUser({ ...formUser, allowedDepartments: current });
+      setFormUser({ ...formUser, allowedDepartments: current.length === 0 ? ['ALL'] : current });
     }
   };
 
@@ -191,6 +258,12 @@ const AdminUserModal: React.FC<AdminUserModalProps> = ({ isOpen, onClose, curren
             Calendario de Festivos
           </button>
           <button 
+            className={`flex-1 py-3 font-medium text-center ${activeTab === 'salary' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
+            onClick={() => setActiveTab('salary')}
+          >
+            Tabla Salarial
+          </button>
+          <button 
             className={`flex-1 py-3 font-medium text-center ${activeTab === 'database' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
             onClick={() => setActiveTab('database')}
           >
@@ -211,7 +284,8 @@ const AdminUserModal: React.FC<AdminUserModalProps> = ({ isOpen, onClose, curren
                   <tr className="bg-gray-100 border-b">
                     <th className="p-3">Usuario</th>
                     <th className="p-3">Rol</th>
-                    <th className="p-3">Permisos</th>
+                    <th className="p-3">Hoteles Permitidos</th>
+                    <th className="p-3">Departamentos Permitidos</th>
                     <th className="p-3 text-right">Acciones</th>
                   </tr>
                 </thead>
@@ -225,12 +299,23 @@ const AdminUserModal: React.FC<AdminUserModalProps> = ({ isOpen, onClose, curren
                         </span>
                       </td>
                       <td className="p-3 text-sm text-gray-600">
-                        {u.allowedDepartments.includes('ALL') ? 'Acceso Total' : u.allowedDepartments.join(', ')}
+                        {(!u.allowedHotels || u.allowedHotels.includes('ALL')) ? (
+                          <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded text-xs font-medium">Todos los Hoteles</span>
+                        ) : (
+                          u.allowedHotels.join(', ')
+                        )}
+                      </td>
+                      <td className="p-3 text-sm text-gray-600">
+                        {(!u.allowedDepartments || u.allowedDepartments.includes('ALL')) ? (
+                          <span className="bg-green-50 text-green-700 px-2 py-0.5 rounded text-xs font-medium">Todos los Departamentos</span>
+                        ) : (
+                          u.allowedDepartments.join(', ')
+                        )}
                       </td>
                       <td className="p-3 text-right space-x-2">
-                        <button onClick={() => handleEdit(u)} className="text-blue-600 hover:text-blue-800">Editar</button>
+                        <button onClick={() => handleEdit(u)} className="text-blue-600 hover:text-blue-800 font-medium">Editar</button>
                         {u.username !== 'admin' && u.username !== currentUser.username && (
-                          <button onClick={() => handleDelete(u.username)} className="text-red-600 hover:text-red-800">Borrar</button>
+                          <button onClick={() => handleDelete(u.username)} className="text-red-600 hover:text-red-800 font-medium">Borrar</button>
                         )}
                       </td>
                     </tr>
@@ -278,33 +363,76 @@ const AdminUserModal: React.FC<AdminUserModalProps> = ({ isOpen, onClose, curren
               </div>
 
               {formUser.role !== 'admin' && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Departamentos Permitidos</label>
-                  <div className="grid grid-cols-2 gap-2 max-h-40 overflow-y-auto border p-2 rounded">
-                    {DEPARTMENTS.map(dept => (
-                      <label key={dept} className="flex items-center gap-2 cursor-pointer hover:bg-gray-50 p-1 rounded">
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">🏨 Hoteles Permitidos</label>
+                    <div className="space-y-2 border p-3 rounded bg-gray-50">
+                      <label className="flex items-center gap-2 cursor-pointer pb-2 border-b">
                         <input 
                           type="checkbox" 
-                          checked={formUser.allowedDepartments.includes(dept)}
-                          onChange={() => toggleDept(dept)}
-                          className="w-4 h-4 text-blue-600"
+                          checked={formUser.allowedHotels?.includes('ALL')}
+                          onChange={() => toggleHotel('ALL')}
+                          className="w-4 h-4 text-blue-600 rounded"
                         />
-                        <span className="text-sm">{dept}</span>
+                        <span className="text-sm font-semibold text-gray-800">Todos los Hoteles</span>
                       </label>
-                    ))}
+                      <div className="grid grid-cols-1 gap-2 pt-1">
+                        {HOTELS.map(hotel => (
+                          <label key={hotel} className="flex items-center gap-2 cursor-pointer hover:bg-white p-1.5 rounded">
+                            <input 
+                              type="checkbox" 
+                              checked={formUser.allowedHotels?.includes('ALL') || formUser.allowedHotels?.includes(hotel)}
+                              onChange={() => toggleHotel(hotel)}
+                              disabled={formUser.allowedHotels?.includes('ALL')}
+                              className="w-4 h-4 text-blue-600 rounded"
+                            />
+                            <span className="text-sm text-gray-700">{hotel}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
                   </div>
-                </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">🏢 Departamentos Permitidos</label>
+                    <div className="space-y-2 border p-3 rounded bg-gray-50">
+                      <label className="flex items-center gap-2 cursor-pointer pb-2 border-b">
+                        <input 
+                          type="checkbox" 
+                          checked={formUser.allowedDepartments?.includes('ALL')}
+                          onChange={() => toggleDept('ALL')}
+                          className="w-4 h-4 text-blue-600 rounded"
+                        />
+                        <span className="text-sm font-semibold text-gray-800">Todos los Departamentos</span>
+                      </label>
+                      <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto pt-1">
+                        {DEPARTMENTS.map(dept => (
+                          <label key={dept} className="flex items-center gap-2 cursor-pointer hover:bg-white p-1.5 rounded">
+                            <input 
+                              type="checkbox" 
+                              checked={formUser.allowedDepartments?.includes('ALL') || formUser.allowedDepartments?.includes(dept)}
+                              onChange={() => toggleDept(dept)}
+                              disabled={formUser.allowedDepartments?.includes('ALL')}
+                              className="w-4 h-4 text-blue-600 rounded"
+                            />
+                            <span className="text-sm text-gray-700">{dept}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </>
               )}
 
               {formUser.role === 'admin' && (
-                 <div className="p-3 bg-purple-50 text-purple-800 text-sm rounded">
-                   Los administradores tienen acceso a todos los departamentos automáticamente.
+                 <div className="p-3 bg-purple-50 text-purple-800 text-sm rounded border border-purple-200">
+                   👑 Los administradores tienen acceso automático y total a todos los hoteles y departamentos.
                  </div>
               )}
 
               <div className="flex gap-2 justify-end pt-4">
                 <button type="button" onClick={() => setIsEditing(false)} className="px-4 py-2 border rounded hover:bg-gray-50">Cancelar</button>
-                <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">Guardar</button>
+                <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 font-medium">Guardar Usuario</button>
               </div>
             </form>
             )
@@ -437,6 +565,84 @@ const AdminUserModal: React.FC<AdminUserModalProps> = ({ isOpen, onClose, curren
             )
           )}
 
+          {activeTab === 'salary' && (
+            <div className="max-w-3xl mx-auto space-y-6">
+              <div className="flex justify-between items-center">
+                <h3 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+                  <span>💰</span> Tabla Salarial
+                </h3>
+                <button
+                  type="button"
+                  onClick={handleSaveSalaryTable}
+                  disabled={isSavingSalary}
+                  className={`flex items-center gap-2 px-5 py-2 rounded-lg font-medium text-sm transition-all shadow-sm ${
+                    salarySaveSuccess
+                      ? 'bg-green-600 text-white'
+                      : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
+                  }`}
+                >
+                  <span>{salarySaveSuccess ? '✓' : '💾'}</span>
+                  <span>{salarySaveSuccess ? '¡Guardado con Éxito!' : isSavingSalary ? 'Guardando...' : 'Guardar Cambios'}</span>
+                </button>
+              </div>
+
+              <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="bg-[#1e293b] text-white">
+                      <th className="py-3.5 px-6 text-sm font-semibold text-center w-1/3">Nivel</th>
+                      <th className="py-3.5 px-6 text-sm font-semibold text-center w-1/3">€ / Día Libre Trabajado</th>
+                      <th className="py-3.5 px-6 text-sm font-semibold text-center w-1/3">€ / Hora Extra</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {salaryTable.map((row) => (
+                      <tr key={row.level} className="hover:bg-slate-50/70 transition-colors">
+                        <td className="py-4 px-6 text-center">
+                          <span className="inline-block bg-indigo-100 text-indigo-700 font-bold px-4 py-1.5 rounded-full text-xs tracking-wider">
+                            {row.level}
+                          </span>
+                        </td>
+                        <td className="py-4 px-6">
+                          <div className="flex items-center justify-center gap-2">
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              value={row.priceDayOff || ''}
+                              onChange={(e) => handleSalaryRateChange(row.level, 'priceDayOff', e.target.value)}
+                              className="w-32 py-1.5 px-3 text-center border border-gray-300 rounded-lg text-sm font-medium focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white"
+                              placeholder="0"
+                            />
+                            <span className="text-gray-500 text-sm font-medium">€</span>
+                          </div>
+                        </td>
+                        <td className="py-4 px-6">
+                          <div className="flex items-center justify-center gap-2">
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              value={row.priceExtraHour || ''}
+                              onChange={(e) => handleSalaryRateChange(row.level, 'priceExtraHour', e.target.value)}
+                              className="w-32 py-1.5 px-3 text-center border border-gray-300 rounded-lg text-sm font-medium focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white"
+                              placeholder="0"
+                            />
+                            <span className="text-gray-500 text-sm font-medium">€</span>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <p className="text-xs text-gray-500 text-center">
+                Los cambios se reflejarán en la ficha de cada empleado. Recuerda guardar antes de salir.
+              </p>
+            </div>
+          )}
+
           {activeTab === 'database' && (
             <div className="max-w-2xl mx-auto mt-8">
               <div className="bg-red-50 border border-red-200 rounded-lg p-6">
@@ -477,3 +683,4 @@ const AdminUserModal: React.FC<AdminUserModalProps> = ({ isOpen, onClose, curren
 };
 
 export default AdminUserModal;
+

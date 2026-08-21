@@ -14,12 +14,21 @@ export interface PeriodoPrueba {
   fechaFin: string | null;
 }
 
+export interface SalaryLevelRate {
+  level: string; // e.g. "NIVEL 1", "NIVEL 2", etc.
+  priceDayOff: number; // € / Día Libre Trabajado (LT)
+  priceExtraHour: number; // € / Hora Extra (HE)
+}
+
 export interface Employee {
   id: string;
   nombre: string;
   fechaAlta: string;
   fechaBaja: string | null;
   periodoPrueba: PeriodoPrueba;
+  nivelSalarial?: string; // e.g. "NIVEL 1", "NIVEL 2", "NIVEL 3"
+  otrasRetribuciones?: number; // Retribuciones adicionales (€/mes) guardadas por defecto mes a mes
+  adelanto?: number; // Importe del adelanto (€) a restar del total
   asistencia: Record<string, string>; // key is day number (1-31)
   horasExtras: Record<string, number>; // key is day number, value is hours
 }
@@ -52,7 +61,9 @@ export interface DragState {
 
 export interface User {
   username: string;
-  password?: string; // Optional because we don't always want to pass it around in UI
+  password?: string; // Optional because we don't always pass it around in UI
   role: 'admin' | 'user';
+  allowedHotels: string[]; // ['ALL'] or specific hotels
   allowedDepartments: string[]; // ['ALL'] or specific departments
 }
+

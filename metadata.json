@@ -1,5 +1,8 @@
 {
   "name": "HotelDevPro",
-  "description": "Sistema profesional de gestión de asistencia de hotel con integración ",
-  "requestFramePermissions": []
+  "description": "Sistema profesional de gestión de asistencia de hotel con control de retribuciones y cuadrantes",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

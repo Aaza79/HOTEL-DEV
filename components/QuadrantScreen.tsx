@@ -165,7 +165,7 @@ const QuadrantScreen: React.FC<QuadrantScreenProps> = ({ data, onBack, onUpdateD
 
   const handleSaveEmployee = async (emp: Employee) => {
     setEmployees(prev => prev.find(e => e.id === emp.id) ? prev.map(e => e.id === emp.id ? emp : e) : [...prev, emp]);
-    await syncEmployeeAcrossMonths(data.metadata.hotel, data.metadata.departamento, emp);
+    await syncEmployeeAcrossMonths(data.metadata.hotel, data.metadata.departamento, emp, data.metadata.año, data.metadata.mes);
   };
 
   const handleDeleteEmployee = async (id: string) => {
@@ -311,7 +311,7 @@ const QuadrantScreen: React.FC<QuadrantScreenProps> = ({ data, onBack, onUpdateD
         )}
       </div>
       
-      <EmployeeModal isOpen={showEmpModal} onClose={() => setShowEmpModal(false)} employees={employees} editId={editingEmpId} onSave={handleSaveEmployee} onDelete={handleDeleteEmployee} onReorder={setEmployees} currentYear={data.metadata.año} />
+      <EmployeeModal isOpen={showEmpModal} onClose={() => setShowEmpModal(false)} employees={employees} editId={editingEmpId} onSave={handleSaveEmployee} onDelete={handleDeleteEmployee} onReorder={setEmployees} currentYear={data.metadata.año} currentMonth={data.metadata.mes} />
       <ExtraHoursModal isOpen={heModal.open} onClose={() => setHeModal({ ...heModal, open: false })} onSave={handleSaveHE} currentHours={heModal.val} empName={employees.find(e => e.id === heModal.empId)?.nombre || ''} day={heModal.day} />
       <ManualModal isOpen={showManual} onClose={() => setShowManual(false)} />
     </div>
